@@ -8,13 +8,18 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
+
+const webhooksRouter = require('./routes/webhooks');
+app.use('/webhooks', webhooksRouter);
+
+
 app.use(express.json());
 
 // Importer le fichier de routes
 const authRouter = require('./routes/auth');
 const userRouter = require('./routes/users');
 const productsRouter = require('./routes/products');
-const webhooksRouter = require('./routes/webhooks');
+// const webhooksRouter = require('./routes/webhooks');
 
 // Route de santé
 app.get('/health', (req, res) => {
@@ -25,7 +30,8 @@ app.get('/health', (req, res) => {
 app.use('/', authRouter); 
 app.use('/users', userRouter); 
 app.use('/products', productsRouter);
-app.use('/webhooks', webhooksRouter);
+// app.use('/webhooks', webhooksRouter);
+
 
 // Démarrage du serveur
 app.listen(PORT, () => {

@@ -1,18 +1,28 @@
 const express = require('express');
 const crypto = require('crypto');
 const supabase = require('../config/supabase');
-
 const router = express.Router();
 
-// Vérifier la signature HMAC du webhook
+// 👇 Middleware uniquement pour cette route (à ne pas globaliser !)
+const rawBodyMiddleware = express.raw({ type: 'application/json' });
+
+// Vérification HMAC
 const verifyShopifyWebhook = (req, res, next) => {
   try {
     const hmacHeader = req.headers['x-shopify-hmac-sha256'];
-    const body = JSON.stringify(req.body);
+
+    if (!hmacHeader || !req.body) {
+      return res.status(400).json({ error: 'Header HMAC ou body manquant' });
+    }
+
+    // req.body doit être un Buffer
+    if (!(req.body instanceof Buffer)) {
+      return res.status(400).json({ error: 'Le corps de la requête n’est pas un Buffer' });
+    }
 
     const generatedHmac = crypto
-      .createHmac('sha256', process.env.SHOPIFY_API_SECRET)
-      .update(body, 'utf8')
+      .createHmac('sha256', process.env.SHOPIFY_WEBHOOK_SECRET)
+      .update(req.body)
       .digest('base64');
 
     if (generatedHmac !== hmacHeader) {
@@ -26,37 +36,41 @@ const verifyShopifyWebhook = (req, res, next) => {
   }
 };
 
-// Endpoint pour gérer les webhooks Shopify
-router.post('/shopify-sales', express.json(), verifyShopifyWebhook, async (req, res) => {
-  try {
-    const { line_items } = req.body;
+// Traitement du webhook
+router.post(
+  '/shopify-sales',
+  rawBodyMiddleware, 
+  verifyShopifyWebhook,
+  async (req, res) => {
+    try {
+      const data = JSON.parse(req.body.toString('utf8'));
+      const lineItems = data.line_items;
 
-    if (!line_items || line_items.length === 0) {
-      return res.status(400).json({ error: 'Aucun produit dans la commande' });
-    }
-
-    // Parcourir les produits de la commande
-    for (const item of line_items) {
-      const shopifyProductId = item.product_id;
-      const quantity = item.quantity;
-
-      // Mettre à jour le sales_count dans Supabase
-      const { data, error } = await supabase
-        .from('products')
-        .update({ sales_count: supabase.raw('sales_count + ?', [quantity]) })
-        .eq('shopify_id', shopifyProductId);
-
-      if (error) {
-        console.error(`Erreur lors de la mise à jour du produit ${shopifyProductId}:`, error);
-        return res.status(500).json({ error: 'Erreur lors de la mise à jour des produits' });
+      if (!lineItems || lineItems.length === 0) {
+        return res.status(400).json({ error: 'Aucun produit dans la commande' });
       }
-    }
 
-    res.status(200).json({ message: 'Webhook traité avec succès' });
-  } catch (error) {
-    console.error('Erreur lors du traitement du webhook:', error);
-    res.status(500).json({ error: 'Erreur lors du traitement du webhook' });
+      for (const item of lineItems) {
+        const shopifyProductId = item.product_id;
+        const quantity = item.quantity;
+      
+        const { error } = await supabase.rpc('increment_sales', {
+          p_shopify_id: shopifyProductId, 
+          p_increment: quantity
+        });
+      
+        if (error) {
+          console.error(`Erreur lors de la mise à jour du produit ${shopifyProductId}:`, error);
+          return res.status(500).json({ error: 'Erreur lors de la mise à jour des produits' });
+        }
+      }
+
+      res.status(200).json({ message: 'Webhook traité avec succès' });
+    } catch (error) {
+      console.error('Erreur lors du traitement du webhook:', error);
+      res.status(500).json({ error: 'Erreur lors du traitement du webhook' });
+    }
   }
-});
+);
 
 module.exports = router;
